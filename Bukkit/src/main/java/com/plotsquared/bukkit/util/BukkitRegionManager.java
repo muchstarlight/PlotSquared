@@ -41,6 +41,8 @@ import com.sk89q.worldedit.bukkit.BukkitWorld;
 import com.sk89q.worldedit.regions.CuboidRegion;
 import com.sk89q.worldedit.world.block.BaseBlock;
 import com.sk89q.worldedit.world.block.BlockTypes;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.bukkit.Bukkit;
 import org.bukkit.Chunk;
 import org.bukkit.World;
@@ -63,6 +65,8 @@ import static com.plotsquared.core.util.entity.EntityCategories.CAP_VEHICLE;
 
 @Singleton
 public class BukkitRegionManager extends RegionManager {
+
+    private static final Logger LOGGER = LogManager.getLogger("PlotSquared/" + BukkitRegionManager.class.getSimpleName());
 
     private final GlobalBlockQueue blockQueue;
 
@@ -87,6 +91,12 @@ public class BukkitRegionManager extends RegionManager {
 
     @Override
     public int[] countEntities(@NonNull Plot plot) {
+        if (FoliaUtil.isFolia()) {
+            // Folia: entities are owned by their region threads and cannot be
+            // counted from a single thread
+            LOGGER.debug("Entity counting is not supported on Folia");
+            return new int[6];
+        }
         int[] existing = (int[]) plot.getMeta("EntityCount");
         if (existing != null && (System.currentTimeMillis() - (long) plot.getMeta("EntityCountTime") < 1000)) {
             return existing;
@@ -294,6 +304,13 @@ public class BukkitRegionManager extends RegionManager {
 
     @Override
     public void clearAllEntities(@NonNull Location pos1, @NonNull Location pos2) {
+        if (FoliaUtil.isFolia()) {
+            // Folia: entities are owned by their region threads and cannot be
+            // iterated from a single thread. Entities inside the cleared area
+            // are preserved (restored via the content map where applicable).
+            LOGGER.debug("Entity cleanup is not supported on Folia");
+            return;
+        }
         String world = pos1.getWorldName();
 
         final World bukkitWorld = BukkitUtil.getWorld(world);

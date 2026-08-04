@@ -1,6 +1,7 @@
 name: PlotSquared
 main: com.plotsquared.bukkit.BukkitPlatform
 api-version: "1.13"
+folia-supported: true
 version: "${version}"
 load: STARTUP
 description: "Easy, yet powerful Plot World generation and management."

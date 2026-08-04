@@ -200,7 +200,9 @@ public class BukkitUtil extends WorldUtil {
     }
 
     private static <T> void ensureMainThread(final @NonNull Consumer<T> consumer, final @NonNull T value) {
-        if (Bukkit.isPrimaryThread()) {
+        if (Bukkit.isPrimaryThread() || FoliaUtil.isFolia()) {
+            // On Folia the async chunk load callback already runs on the
+            // chunk's owning region thread, so the consumer can run directly
             consumer.accept(value);
         } else {
             Bukkit.getScheduler().runTask(BukkitPlatform.getPlugin(BukkitPlatform.class), () -> consumer.accept(value));
@@ -392,7 +394,19 @@ public class BukkitUtil extends WorldUtil {
 
     @Override
     public void refreshChunk(int x, int z, String world) {
-        Bukkit.getWorld(world).refreshChunk(x, z);
+        final org.bukkit.World bukkitWorld = Bukkit.getWorld(world);
+        if (FoliaUtil.isFolia() && !Bukkit.isOwnedByCurrentRegion(bukkitWorld, x, z)) {
+            // Folia: refreshChunk must run on the chunk's owning region thread
+            Bukkit.getRegionScheduler().run(
+                    BukkitPlatform.getPlugin(BukkitPlatform.class),
+                    bukkitWorld,
+                    x,
+                    z,
+                    task -> bukkitWorld.refreshChunk(x, z)
+            );
+        } else {
+            bukkitWorld.refreshChunk(x, z);
+        }
     }
 
     @Override
@@ -563,7 +577,9 @@ public class BukkitUtil extends WorldUtil {
     @Override
     public Set<BlockVector2> getChunkChunks(String world) {
         Set<BlockVector2> chunks = super.getChunkChunks(world);
-        if (Bukkit.isPrimaryThread()) {
+        if (Bukkit.isPrimaryThread() || FoliaUtil.isFolia()) {
+            // Folia: there is no single main thread to bounce to, so we read
+            // the loaded chunks directly (safe when called from a region thread)
             for (Chunk chunk : Objects.requireNonNull(Bukkit.getWorld(world)).getLoadedChunks()) {
                 BlockVector2 loc = BlockVector2.at(chunk.getX() >> 5, chunk.getZ() >> 5);
                 chunks.add(loc);

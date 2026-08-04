@@ -139,3 +139,10 @@ build/
 .DS_Store
 # Ignore run folders
 run-*/
+.vscode/settings.json
+
+# Agent
+AGENTS.md
+
+# folia docx
+docx.log

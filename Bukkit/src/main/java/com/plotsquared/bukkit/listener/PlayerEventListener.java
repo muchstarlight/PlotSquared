@@ -21,6 +21,7 @@ package com.plotsquared.bukkit.listener;
 import com.destroystokyo.paper.MaterialTags;
 import com.google.common.base.Charsets;
 import com.google.inject.Inject;
+import com.plotsquared.bukkit.BukkitPlatform;
 import com.plotsquared.bukkit.player.BukkitPlayer;
 import com.plotsquared.bukkit.util.BukkitEntityUtil;
 import com.plotsquared.bukkit.util.BukkitUtil;
@@ -78,7 +79,6 @@ import com.plotsquared.core.util.PlotFlagUtil;
 import com.plotsquared.core.util.PremiumVerification;
 import com.plotsquared.core.util.entity.EntityCategories;
 import com.plotsquared.core.util.task.TaskManager;
-import com.plotsquared.core.util.task.TaskTime;
 import com.sk89q.worldedit.WorldEdit;
 import com.sk89q.worldedit.bukkit.BukkitAdapter;
 import com.sk89q.worldedit.util.Enums;
@@ -546,16 +546,20 @@ public class PlayerEventListener implements Listener {
                 plotListener.plotEntry(pp, plot);
             }
         }
-        // Delayed
-
-        // Async
-        TaskManager.runTaskLaterAsync(
-                () -> {
+        // Delayed — run on the player's owning region thread (the main thread
+        // on Paper, the player's region thread on Folia) so that saveData and
+        // join tasks execute in a thread-safe context
+        player.getScheduler().runDelayed(
+                BukkitPlatform.getPlugin(BukkitPlatform.class),
+                scheduledTask -> {
                     if (!player.hasPlayedBefore() && player.isOnline()) {
                         player.saveData();
                     }
                     this.eventDispatcher.doJoinTask(pp);
-                }, TaskTime.seconds(1L)
+                },
+                () -> {
+                },
+                20L
         );
 
         if (pp.hasPermission(Permission.PERMISSION_ADMIN_UPDATE_NOTIFICATION.toString()) && Settings.Enabled_Components.UPDATE_NOTIFICATIONS

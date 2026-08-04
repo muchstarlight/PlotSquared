@@ -48,11 +48,13 @@ import com.plotsquared.bukkit.placeholder.PlaceholderFormatter;
 import com.plotsquared.bukkit.player.BukkitPlayerManager;
 import com.plotsquared.bukkit.util.BukkitUtil;
 import com.plotsquared.bukkit.util.BukkitWorld;
+import com.plotsquared.bukkit.util.FoliaUtil;
 import com.plotsquared.bukkit.util.PaperSupport;
 import com.plotsquared.bukkit.util.SetGenCB;
 import com.plotsquared.bukkit.util.TranslationUpdateManager;
 import com.plotsquared.bukkit.util.UpdateUtility;
 import com.plotsquared.bukkit.util.task.BukkitTaskManager;
+import com.plotsquared.bukkit.util.task.FoliaTaskManager;
 import com.plotsquared.bukkit.util.task.PaperTimeConverter;
 import com.plotsquared.bukkit.util.task.SpigotTimeConverter;
 import com.plotsquared.bukkit.uuid.EssentialsUUIDService;
@@ -269,15 +271,25 @@ public final class BukkitPlatform extends JavaPlugin implements Listener, PlotPl
         this.pluginName = getDescription().getName();
 
         final TaskTime.TimeConverter timeConverter;
-        if (PaperSupport.isPaper()) {
+        final TaskManager taskManager;
+        if (FoliaUtil.isFolia()) {
+            // On Folia there is no single main thread: the Bukkit scheduler is
+            // unavailable, so we use the Paper scheduler API (global region
+            // scheduler + async scheduler). Ticks are a fixed 50ms there, as
+            // the average tick time is not available in a regionized context.
+            timeConverter = new SpigotTimeConverter();
+            taskManager = new FoliaTaskManager(this, timeConverter);
+        } else if (PaperSupport.isPaper()) {
             timeConverter = new PaperTimeConverter();
+            taskManager = new BukkitTaskManager(this, timeConverter);
         } else {
             timeConverter = new SpigotTimeConverter();
+            taskManager = new BukkitTaskManager(this, timeConverter);
         }
 
         // Stuff that needs to be created before the PlotSquared instance
         PlotPlayer.registerConverter(Player.class, BukkitUtil::adapt);
-        TaskManager.setPlatformImplementation(new BukkitTaskManager(this, timeConverter));
+        TaskManager.setPlatformImplementation(taskManager);
 
         final PlotSquared plotSquared = new PlotSquared(this, "Bukkit");
 
@@ -354,7 +366,13 @@ public final class BukkitPlatform extends JavaPlugin implements Listener, PlotPl
         // Do stuff that was previously done in PlotSquared
         // Kill entities
         if (Settings.Enabled_Components.KILL_ROAD_MOBS || Settings.Enabled_Components.KILL_ROAD_VEHICLES) {
-            this.runEntityTask();
+            if (FoliaUtil.isFolia()) {
+                // Folia: entities are owned by their region threads and cannot
+                // be iterated from a single global task
+                LOGGER.info("Road mob/vehicle cleanup is disabled on Folia (entities are regionized)");
+            } else {
+                this.runEntityTask();
+            }
         }
 
         // WorldEdit
@@ -569,17 +587,23 @@ public final class BukkitPlatform extends JavaPlugin implements Listener, PlotPl
         this.startMetrics();
 
         if (Settings.Enabled_Components.WORLDS) {
-            TaskManager.getPlatformImplementation().taskRepeat(this::unload, TaskTime.seconds(10L));
-            try {
-                singleWorldListener = injector().getInstance(SingleWorldListener.class);
-                Bukkit.getPluginManager().registerEvents(singleWorldListener, this);
-            } catch (Exception e) {
-                e.printStackTrace();
+            if (FoliaUtil.isFolia()) {
+                // Folia: chunk unload is managed by the regionized chunk
+                // system, there is no single thread that may unload chunks
+                LOGGER.info("World unload watchdog is disabled on Folia (chunk lifecycle is regionized)");
+            } else {
+                TaskManager.getPlatformImplementation().taskRepeat(this::unload, TaskTime.seconds(10L));
+                try {
+                    singleWorldListener = injector().getInstance(SingleWorldListener.class);
+                    Bukkit.getPluginManager().registerEvents(singleWorldListener, this);
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
             }
         }
 
         // Clean up potential memory leak
-        Bukkit.getScheduler().runTaskTimer(this, () -> {
+        TaskManager.runTaskRepeat(() -> {
             try {
                 for (final PlotPlayer<? extends Player> player : this.playerManager().getPlayers()) {
                     if (player.getPlatformPlayer() == null || !player.getPlatformPlayer().isOnline()) {
@@ -589,7 +613,7 @@ public final class BukkitPlatform extends JavaPlugin implements Listener, PlotPl
             } catch (final Exception e) {
                 getLogger().warning("Failed to clean up players: " + e.getMessage());
             }
-        }, 100L, 100L);
+        }, TaskTime.ticks(100L));
 
         // Check if we are in a safe environment
         ServerLib.checkUnsafeForks();
@@ -747,7 +771,12 @@ public final class BukkitPlatform extends JavaPlugin implements Listener, PlotPl
     @Override
     public void onDisable() {
         PlotSquared.get().disable();
-        Bukkit.getScheduler().cancelTasks(this);
+        // Cancel tasks tracked by the scheduler API (works on both Paper and Folia)
+        Bukkit.getGlobalRegionScheduler().cancelTasks(this);
+        Bukkit.getAsyncScheduler().cancelTasks(this);
+        if (!FoliaUtil.isFolia()) {
+            Bukkit.getScheduler().cancelTasks(this);
+        }
     }
 
     @Override

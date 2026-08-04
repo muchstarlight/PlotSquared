@@ -19,6 +19,8 @@
 package com.plotsquared.bukkit.listener;
 
 import com.google.inject.Inject;
+import com.plotsquared.bukkit.BukkitPlatform;
+import com.plotsquared.bukkit.util.FoliaUtil;
 import com.plotsquared.bukkit.util.PaperSupport;
 import com.plotsquared.core.configuration.Settings;
 import com.plotsquared.core.location.Location;
@@ -237,32 +239,59 @@ public class ChunkListener implements Listener {
     }
 
     private void cleanChunk(final Chunk chunk) {
+        if (FoliaUtil.isFolia()) {
+            // Folia: the cleanup must run on the chunk's owning region thread
+            Bukkit.getRegionScheduler().runAtFixedRate(
+                    BukkitPlatform.getPlugin(BukkitPlatform.class),
+                    chunk.getWorld(),
+                    chunk.getX(),
+                    chunk.getZ(),
+                    task -> {
+                        if (cleanChunkStep(chunk)) {
+                            task.cancel();
+                        }
+                    },
+                    5L,
+                    5L
+            );
+            return;
+        }
         final int currentIndex = TaskManager.index.incrementAndGet();
         PlotSquaredTask task = TaskManager.runTaskRepeat(() -> {
-            if (!chunk.isLoaded()) {
+            if (cleanChunkStep(chunk)) {
                 Objects.requireNonNull(TaskManager.removeTask(currentIndex)).cancel();
-                chunk.unload(true);
-                return;
-            }
-            BlockState[] tiles = chunk.getTileEntities();
-            if (tiles.length == 0) {
-                Objects.requireNonNull(TaskManager.removeTask(currentIndex)).cancel();
-                chunk.unload(true);
-                return;
-            }
-            long start = System.currentTimeMillis();
-            int i = 0;
-            while (System.currentTimeMillis() - start < 250) {
-                if (i >= tiles.length - Settings.Chunk_Processor.MAX_TILES) {
-                    Objects.requireNonNull(TaskManager.removeTask(currentIndex)).cancel();
-                    chunk.unload(true);
-                    return;
-                }
-                tiles[i].getBlock().setType(Material.AIR, false);
-                i++;
             }
         }, TaskTime.ticks(5L));
         TaskManager.addTask(task, currentIndex);
+    }
+
+    /**
+     * Run one cleanup step on the given chunk
+     *
+     * @param chunk Chunk to clean
+     * @return {@code true} if the cleanup is complete (the task should cancel)
+     */
+    private boolean cleanChunkStep(final Chunk chunk) {
+        if (!chunk.isLoaded()) {
+            chunk.unload(true);
+            return true;
+        }
+        BlockState[] tiles = chunk.getTileEntities();
+        if (tiles.length == 0) {
+            chunk.unload(true);
+            return true;
+        }
+        long start = System.currentTimeMillis();
+        int i = 0;
+        while (System.currentTimeMillis() - start < 250) {
+            if (i >= tiles.length - Settings.Chunk_Processor.MAX_TILES) {
+                chunk.unload(true);
+                return true;
+            }
+            tiles[i].getBlock().setType(Material.AIR, false);
+            i++;
+        }
+        return false;
     }
 
     public boolean processChunk(Chunk chunk, boolean unload) {

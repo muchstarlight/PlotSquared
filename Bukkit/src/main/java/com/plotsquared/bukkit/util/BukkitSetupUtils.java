@@ -34,6 +34,8 @@ import com.plotsquared.core.plot.world.PlotAreaManager;
 import com.plotsquared.core.setup.PlotAreaBuilder;
 import com.plotsquared.core.util.SetupUtils;
 import com.plotsquared.core.util.task.TaskManager;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.bukkit.Bukkit;
 import org.bukkit.Chunk;
 import org.bukkit.Location;
@@ -51,6 +53,8 @@ import java.util.Objects;
 
 @Singleton
 public class BukkitSetupUtils extends SetupUtils {
+
+    private static final Logger LOGGER = LogManager.getLogger("PlotSquared/" + BukkitSetupUtils.class.getSimpleName());
 
     private final PlotAreaManager plotAreaManager;
     private final YamlConfiguration worldConfiguration;
@@ -99,6 +103,12 @@ public class BukkitSetupUtils extends SetupUtils {
 
     @Override
     public void unload(String worldName, boolean save) {
+        if (FoliaUtil.isFolia()) {
+            // Folia: chunks are managed by the regionized chunk system and
+            // cannot be unloaded from a single thread
+            LOGGER.warn("World unload is not supported on Folia (chunk lifecycle is regionized)");
+            return;
+        }
         TaskManager.runTask(() -> {
             World world = Bukkit.getWorld(worldName);
             if (world == null) {

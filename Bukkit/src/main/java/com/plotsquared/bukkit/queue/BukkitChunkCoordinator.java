@@ -21,6 +21,7 @@ package com.plotsquared.bukkit.queue;
 import com.google.inject.Inject;
 import com.google.inject.assistedinject.Assisted;
 import com.plotsquared.bukkit.BukkitPlatform;
+import com.plotsquared.bukkit.util.FoliaUtil;
 import com.plotsquared.bukkit.util.PaperSupport;
 import com.plotsquared.core.PlotSquared;
 import com.plotsquared.core.queue.ChunkCoordinator;
@@ -224,30 +225,68 @@ public final class BukkitChunkCoordinator extends ChunkCoordinator {
         for (int i = 0; i < this.batchSize && this.requestedChunks.peek() != null; i++) {
             final BlockVector2 chunk = this.requestedChunks.poll();
             loadingChunks.incrementAndGet();
-            PaperSupport
-                    .getChunkAtAsync(this.bukkitWorld, chunk.getX(), chunk.getZ(), shouldGen, true)
-                    .orTimeout(10L, TimeUnit.SECONDS)
-                    .whenComplete((chunkObject, throwable) -> {
-                        loadingChunks.decrementAndGet();
-                        if (throwable != null) {
-                            if (throwable instanceof TimeoutException) {
-                                LOGGER.warn("Timed out awaiting chunk load {}", chunk);
-                                this.requestedChunks.offer(chunk);
-                            } else {
-                                LOGGER.error("Failed to load chunk {}", chunk, throwable);
-                                // We want one less because this couldn't be processed
+            if (FoliaUtil.isFolia()) {
+                // Folia: the callback runs on the chunk's owning region thread,
+                // so chunk operations (tickets, block writes) are safe to
+                // perform directly in the callback. The regionized chunk
+                // loader provides the natural throttling here.
+                this.bukkitWorld.getChunkAtAsync(
+                        chunk.getX(),
+                        chunk.getZ(),
+                        shouldGen,
+                        (loadedChunk) -> {
+                            loadingChunks.decrementAndGet();
+                            if (loadedChunk == null) {
+                                if (shouldGen) {
+                                    LOGGER.error("Null chunk returned for chunk at {}", chunk);
+                                }
                                 this.expectedSize.decrementAndGet();
+                                return;
                             }
-                        } else if (chunkObject == null) {
-                            if (shouldGen) {
-                                LOGGER.error("Null chunk returned for chunk at {}", chunk);
+                            if (finished) {
+                                return;
                             }
-                        } else if (PlotSquared.get().isMainThread(Thread.currentThread())) {
-                            this.processChunk(chunkObject);
-                        } else {
-                            TaskManager.runTask(() -> this.processChunk(chunkObject));
+                            try {
+                                loadedChunk.addPluginChunkTicket(this.plugin);
+                                this.chunkConsumer.accept(BlockVector2.at(loadedChunk.getX(), loadedChunk.getZ()));
+                                if (unloadAfter) {
+                                    this.freeChunk(loadedChunk);
+                                }
+                            } catch (final Throwable throwable) {
+                                this.throwableConsumer.accept(throwable);
+                            }
+                            final int remaining = this.expectedSize.decrementAndGet();
+                            if (remaining <= 0) {
+                                finish();
+                            }
                         }
-                    });
+                );
+            } else {
+                PaperSupport
+                        .getChunkAtAsync(this.bukkitWorld, chunk.getX(), chunk.getZ(), shouldGen, true)
+                        .orTimeout(10L, TimeUnit.SECONDS)
+                        .whenComplete((chunkObject, throwable) -> {
+                            loadingChunks.decrementAndGet();
+                            if (throwable != null) {
+                                if (throwable instanceof TimeoutException) {
+                                    LOGGER.warn("Timed out awaiting chunk load {}", chunk);
+                                    this.requestedChunks.offer(chunk);
+                                } else {
+                                    LOGGER.error("Failed to load chunk {}", chunk, throwable);
+                                    // We want one less because this couldn't be processed
+                                    this.expectedSize.decrementAndGet();
+                                }
+                            } else if (chunkObject == null) {
+                                if (shouldGen) {
+                                    LOGGER.error("Null chunk returned for chunk at {}", chunk);
+                                }
+                            } else if (PlotSquared.get().isMainThread(Thread.currentThread())) {
+                                this.processChunk(chunkObject);
+                            } else {
+                                TaskManager.runTask(() -> this.processChunk(chunkObject));
+                            }
+                        });
+            }
         }
     }
 

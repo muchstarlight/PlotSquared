@@ -25,12 +25,13 @@ import com.google.inject.Inject;
 import com.plotsquared.core.PlotSquared;
 import com.plotsquared.core.PlotVersion;
 import com.plotsquared.core.configuration.Settings;
+import com.plotsquared.core.util.task.PlotSquaredTask;
+import com.plotsquared.core.util.task.TaskManager;
+import com.plotsquared.core.util.task.TaskTime;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.bukkit.Bukkit;
 import org.bukkit.event.Listener;
 import org.bukkit.plugin.java.JavaPlugin;
-import org.bukkit.scheduler.BukkitTask;
 
 import javax.net.ssl.HttpsURLConnection;
 import java.io.IOException;
@@ -44,7 +45,7 @@ public class UpdateUtility implements Listener {
     public static PlotVersion internalVersion;
     public static String spigotVersion;
     public static boolean hasUpdate;
-    private static BukkitTask task;
+    private static PlotSquaredTask task;
     public final JavaPlugin javaPlugin;
     private boolean notify = true;
 
@@ -57,7 +58,7 @@ public class UpdateUtility implements Listener {
     @SuppressWarnings({"deprecation", "DefaultCharset"})
     // Suppress Json deprecation, we can't use features from gson 2.8.1 and newer yet
     public void updateChecker() {
-        task = Bukkit.getScheduler().runTaskTimerAsynchronously(this.javaPlugin, () -> {
+        task = TaskManager.getPlatformImplementation().taskRepeatAsync(() -> {
             try {
                 HttpsURLConnection connection = (HttpsURLConnection) URI.create(
                         "https://api.spigotmc.org/simple/0.2/index.php?action=getResource&id=77506")
@@ -87,11 +88,11 @@ public class UpdateUtility implements Listener {
                 notify = false;
                 LOGGER.info("Congratulations! You are running the latest PlotSquared version");
             }
-        }, 0L, (long) Settings.UpdateChecker.POLL_RATE * 60 * 20);
+        }, TaskTime.ticks((long) Settings.UpdateChecker.POLL_RATE * 60 * 20));
     }
 
     private void cancelTask() {
-        Bukkit.getScheduler().runTaskLater(javaPlugin, () -> task.cancel(), 20L);
+        TaskManager.runTaskLater(task::cancel, TaskTime.ticks(20L));
     }
 
 }
